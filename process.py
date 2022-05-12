@@ -320,7 +320,7 @@ class Video2(object):
         assert int(pos_frames) == 0, "Video not at index 0"
 
         self.frameCount = 0     # Initialise frame count with 0
-        videoTime = 0      # Equivalent to the selected frames count
+        selectedFrameCounts = 0 # Equivalent to the selected frames count
 
         height, width = (
             int(self.cap.get(cv.CAP_PROP_FRAME_HEIGHT)),   # get these parameters from the opencv video capture object
@@ -330,7 +330,8 @@ class Video2(object):
         fps = self.cap.get(cv.CAP_PROP_FPS)    # get these parameters from the opencv video capture object
         length = int(self.cap.get(cv.CAP_PROP_FRAME_COUNT))    # total frame count
         assert fps and length, "File {} not loaded".format(self.filepath)
-        actual_frame_count = int(-(-length // fps))
+        # actual_frame_count = int(-(-length // fps))  # round up the selected frame count
+        actual_frame_count = int(length // fps)
         log.info(
             "{:.2f} fps, {:.2f} seconds, {} selected frames / {} total frames".format(fps, length / fps, actual_frame_count, length)
         )
@@ -359,12 +360,15 @@ class Video2(object):
             if frame is None:
                 log.warn("Empty frame")
                 continue
-
+            
+            # Selects one frame from each video second
             if self.frameCount % frequency != 0:    # Loop thru video frames at the set frequency (Genius!)
+                # print(round(self.frameCount / frequency, 2))
                 self.frameCount += 1
                 continue
+            
             # Beyond this part of the code, the frame is one of the selected frame for processing, 
-            videoTime += 1
+            selectedFrameCounts += 1
 
             # Get faces and detect emotions; coordinates are for unpadded frame
             try:
@@ -380,25 +384,27 @@ class Video2(object):
 
             # Changed here
             if faces:   # if detected any face, append to the emo-freq timeline dataframe
-                emo_freq_df = pd.concat([emo_freq_df, self.emo_freq_row(faces, videoTime)])
+                emo_freq_df = pd.concat([emo_freq_df, self.emo_freq_row(faces, selectedFrameCounts)])
 
             results_nr += 1
             if max_results and results_nr > max_results:    # check if frame count exceeds max frames allowed to process
                 break
 
             pbar.update(1)
-            # pbar_increment += 100//actual_frame_count * videoTime
-            curr_prog = -(-100//actual_frame_count) * (videoTime-1)
+            curr_prog = int((100 / actual_frame_count) * (selectedFrameCounts))
+            # print(f'Processing {selectedFrameCounts} / {actual_frame_count} frames. But printing progress {curr_prog}')
             st_pbar.progress(curr_prog)
             if curr_prog < 100: video_processing.text(f'Processing {curr_prog}% ...')
             else: video_processing.text(f'Processing completed!')
 
         pbar.close()
+        st_pbar.progress(100)
+        video_processing.text(f'Processing completed!')
         self._close_video(outfile, save_frames, zip_images)   # close the video, save the images into a zip files
         return emo_freq_df.reset_index(drop=True)
 
     def mean_cnt(self, df):
-        """Return the average frequeny of each emotion in a single row dataframe"""
+        """Return the average frequency of each emotion in a single row dataframe"""
         emos = list(FER._get_labels().values())
         df = pd.DataFrame({
             'Mean Frequency' : df[emos].mean().astype(int)
