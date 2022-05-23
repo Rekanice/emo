@@ -393,9 +393,11 @@ class Video2(object):
             pbar.update(1)
             curr_prog = int((100 / actual_frame_count) * (selectedFrameCounts))
             # print(f'Processing {selectedFrameCounts} / {actual_frame_count} frames. But printing progress {curr_prog}')
-            st_pbar.progress(curr_prog)
-            if curr_prog < 100: video_processing.text(f'Processing {curr_prog}% ...')
-            else: video_processing.text(f'Processing completed!')
+            
+            if curr_prog < 100: 
+                video_processing.text(f'Processing {curr_prog}% ...')
+                st_pbar.progress(curr_prog)
+            else: break
 
         pbar.close()
         st_pbar.progress(100)
