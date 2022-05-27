@@ -19,14 +19,96 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 import streamlit as st
 import mimetypes
-import plotly.graph_objects as go
+
+import sys
+from retinaface import RetinaFace
+from deepface import DeepFace
+import mediapipe as mp
+
+def choose_model_4img(img, model):
+    if model == 'FER':
+        detector = FER(mtcnn=True)
+        faces = detector.detect_emotions(img)
+        return faces   
+
+    elif model == 'RetinaFace':
+        faces = RetinaFace.detect_faces(img_path = img)
+        faces_matrices = []
+        faces_bboxes = []
+        for key in faces:
+            identity = faces[key]
+            facial_area = identity["facial_area"]
+            y = facial_area[1]
+            h = facial_area[3] - y
+            x = facial_area[0]
+            w = facial_area[2] - x
+            img_region = [x, y, w, h]
+
+            #detected_face = img[int(y):int(y+h), int(x):int(x+w)] #opencv
+            detected_face = img[facial_area[1]: facial_area[3], facial_area[0]: facial_area[2]]
+
+            faces_matrices.append(detected_face)
+            faces_bboxes.append(img_region)
+        
+        embeddings = []
+        for face_matrix, bbox in zip(faces_matrices, faces_bboxes):
+            embedding = DeepFace.analyze(img_path = face_matrix, img_bbox=bbox, enforce_detection = False,
+                                            detector_backend = 'skip')
+            embeddings.append(embedding)
+        return embeddings
+
+    elif model == 'Mediapipe':
+        mp_face_detection = mp.solutions.face_detection
+        face_detection =  mp_face_detection.FaceDetection(min_detection_confidence=0.5)
+        
+        img_width = img.shape[1]
+        img_height = img.shape[0]
+        faces_matrices = []
+        faces_bboxes = []
+
+        with mp_face_detection.FaceDetection(
+            model_selection=1, min_detection_confidence=0.08) as face_detection:
+            img.flags.writeable = False
+
+            faces = face_detection.process(cv.cvtColor(img, cv.COLOR_BGR2RGB))
+
+            if faces.detections:
+                # print("got detection!!!")
+                print(len(faces.detections))
+                for detection in faces.detections:
+                    
+                    confidence = detection.score
+                    bounding_box = detection.location_data.relative_bounding_box
+                    
+                    x = int(bounding_box.xmin * img_width)
+                    w = int(bounding_box.width * img_width)
+                    y = int(bounding_box.ymin * img_height)
+                    h = int(bounding_box.height * img_height)
+                    if x > 0 and y > 0:
+                        detected_face = img[y:y+h, x:x+w]
+                        img_region = [x, y, w, h]
+                        
+                        faces_matrices.append(detected_face)
+                        faces_bboxes.append(img_region)
+
+            embeddings = []
+            for face_matrix, bbox in zip(faces_matrices, faces_bboxes):
+                embedding = DeepFace.analyze(img_path = face_matrix, img_bbox=bbox, enforce_detection = False,
+                                                detector_backend = 'skip')
+                embeddings.append(embedding)
+            return embeddings
+    
+    else: print("Invalid model", file=sys.stderr)
+
 
 # - - - - - - For image input - - - - - - - - - 
 
-def image (pil_img):
+def image (pil_img, model):
     cv_img = cv.cvtColor(np.array(pil_img), cv.COLOR_RGB2BGR)
-    detector = FER(mtcnn=True)
-    faces = detector.detect_emotions(cv_img)
+
+    # detector = FER(mtcnn=True)
+    # faces = detector.detect_emotions(cv_img)
+    faces = choose_model_4img(cv_img, model)
     cv_img = draw_annotations(cv_img, faces)
     pil_img = Image.fromarray(cv.cvtColor(cv_img, cv.COLOR_BGR2RGB))
     return faces, pil_img
@@ -270,7 +352,7 @@ class Video2(object):
 
     def analyze(
         self,
-        detector,  # fer.FER instance
+        model,  
         display: bool = False,
         output: str = "csv",
         frequency: Optional[int] = None,
@@ -313,7 +395,7 @@ class Video2(object):
 
         # Open video
         assert self.cap.open(self.filepath), "Video capture not opening"
-        self.__emotions = detector._get_labels().items()    # get the emotion labels from the FER object
+        self.__emotions = FER._get_labels().items()    # get the emotion labels from the FER object
         
         self.cap.set(cv.CAP_PROP_POS_FRAMES, 0)
         pos_frames = self.cap.get(cv.CAP_PROP_POS_FRAMES)
@@ -369,10 +451,29 @@ class Video2(object):
             
             # Beyond this part of the code, the frame is one of the selected frame for processing, 
             selectedFrameCounts += 1
-
+            
+            '''
+            detector.detect_emotions(frame) --> should return this format of output
+            [{
+                'box': [170, 93, 15, 20],
+                'emotions': {   
+                                'angry': 0.1,
+                                'disgust': 0.0,
+                                'fear': 0.01,
+                                'happy': 0.13,
+                                'neutral': 0.55,
+                                'sad': 0.19,
+                                'surprise': 0.02
+                            }
+                }, ...
+            ]
+            '''
             # Get faces and detect emotions; coordinates are for unpadded frame
             try:
-                faces = detector.detect_emotions(frame)     # detect emotions!!!!
+                # faces = choose_model_4img(model)     # detect emotions!!!!
+                # faces = detector.detect_emotions(frame)
+                faces = choose_model_4img(frame, model) 
+
             except Exception as e:
                 log.error(e)
                 break
@@ -403,26 +504,31 @@ class Video2(object):
         st_pbar.progress(100)
         video_processing.text(f'Processing completed!')
         self._close_video(outfile, save_frames, zip_images)   # close the video, save the images into a zip files
+
+
+
         return emo_freq_df.reset_index(drop=True)
 
     def mean_cnt(self, df):
         """Return the average frequency of each emotion in a single row dataframe"""
         emos = list(FER._get_labels().values())
+
         df = pd.DataFrame({
+            'Emotion': emos,
             'Mean Frequency' : df[emos].mean().astype(int)
         })
+
+        df.to_csv('emo_mean.csv', index=False)
         return df
 
 
 
-def process_video(video_file, video_name):
+def process_video(video_file, video_name, model):
     video = Video2(video_file, video_name)
-    detector = FER(mtcnn=True)
 
-    start_time = time.time()
     # Output list of dictionaries
     emo_timeline_df = video.analyze(
-        detector,  
+        model,  
         display = False,
         frequency = 30,
         video_id = None,
@@ -431,27 +537,63 @@ def process_video(video_file, video_name):
         annotate_frames = True,
         zip_images = True,
     )
-    end_time = time.time()
-
-    print("\nTime taken = ", round(end_time - start_time, 0), "seconds\n")
-
+    
     mean_emo_cnt = video.mean_cnt(emo_timeline_df)
-    # Plot emotions
-    # df.plot()
-    # plt.show()
+    
+    # emo_timeline_df.to_csv('emo_timeline.csv', index=False)
 
     return emo_timeline_df, mean_emo_cnt
 
-def video_stats(df):
+
+def video_stats_timeline(df):
+    import plotly.graph_objects as go
+
     emos = list(FER._get_labels().values())
     fig = go.Figure()
     for emo in emos:
         fig.add_trace(go.Scatter(x=df['time'], y=df[emo], name=emo))
     fig.update_traces(mode='lines+markers')
-    fig.update_layout(title='Timeline of emotions in video',
+    fig.update_layout(title='Timeline of emotions frequency in the video',
                     xaxis_title='Video time (seconds)',
                     yaxis_title='Frequency (people)')
     return fig
+
+def video_stats_meanfreq(df):
+    import plotly.express as px
+    fig = px.bar(df, x="Emotion", y="Mean Frequency", title="On average, how many people have these emotions")
+    return fig
+
+def video_stats_pctg(df):
+    emos = list(FER._get_labels().values())
+    df['Total'] = df[emos].sum(axis=1)
+
+    for emo in emos:
+        df[f'{emo}_pct']= (df[emo]/df['Total']*100).astype(int)
+        df[f'{emo}_pct'] = df[f'{emo}_pct'].astype(str) + '%'
+
+    import plotly.graph_objects as go
+
+    data = []
+    for emo in emos:
+        data.append(go.Bar(name=emo, x=df['time'], y=df[emo], text= df[f'{emo}_pct'], textposition='inside') )
+    fig = go.Figure(data=data)
+    fig.update_layout(barmode='stack',
+                    title='Timeline of emotions composition in the video',
+                    xaxis_title='Video time (seconds)',
+                    yaxis_title='Frequency (people)',
+                    uniformtext_minsize=6, uniformtext_mode='hide')
+    fig.update_layout(hovermode="x unified")
+    fig.update_layout(legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="right",
+        x=1
+    ))
+    return fig
+
+
+
 
 # - - - - - - Utility - - - - - - - - - 
 mimetypes.init()
