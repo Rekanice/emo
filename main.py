@@ -1,12 +1,9 @@
 from process import process_video, mediaFileType, video_stats_timeline
 from process import image, emo_freqtable, img_stats, video_stats_meanfreq, video_stats_pctg
-import pandas as pd
-import cv2 as cv
 import streamlit as st
 
 from PIL import Image
 import tempfile
-from pyautogui import hotkey
 from time import time
 
 
@@ -42,13 +39,18 @@ st.text('')
 
 if st.button('Run'):
     
+    start_time=0
+    end_time=0
 
     input_path = uploaded_file.name
-    
+    st.session_state.done_flag = True
+
     if mediaFileType(input_path) == 1:    # Image input
         st.session_state.input_type = 1
         st.session_state.pil_img = Image.open(uploaded_file).convert('RGB') 
+        start_time = time()
         faces, st.session_state.pil_img = image(st.session_state.pil_img, st.session_state.model_option)
+        end_time = time()
         print(faces)
         eft = emo_freqtable(faces)
         st.session_state.freq_tb = img_stats(eft)
@@ -64,7 +66,6 @@ if st.button('Run'):
         st.session_state.emo_percent = video_stats_pctg(ef_df)
         st.session_state.freq_tb = video_stats_meanfreq(avg)
         
-    
     else:   #   Wrong file type
         pass
     
@@ -72,44 +73,36 @@ if st.button('Run'):
     
     st.write("Time taken: ", round(end_time - start_time, 3), 'seconds')
     # st.metric("Time taken", str(round(end_time - start_time, 3)) + ' seconds')
+
+
+if st.session_state.done_flag == True and st.session_state.input_type == 1:
+    st.header("Image Results")
+    st.image(st.session_state.pil_img)
+    st.write("Emotions Distribution")
+    st.dataframe(st.session_state.freq_tb) 
     
-    if st.session_state.input_type == 1:
-        st.header("Image Results")
-        st.image(st.session_state.pil_img)
-        st.write("Emotions Distribution")
-        st.dataframe(st.session_state.freq_tb) 
-        
-        st.text('')
-        #Reset
-        if st.button('Reset'):
-            hotkey('f5') 
-
-
-    elif st.session_state.input_type == 2:
-        st.header("Video Results")
-        st.plotly_chart(st.session_state.emo_tl)
-        st.plotly_chart(st.session_state.emo_percent)
-        st.plotly_chart(st.session_state.freq_tb) 
-        st.text('')
+elif st.session_state.done_flag == True and st.session_state.input_type == 2:
+    st.header("Video Results")
+    st.plotly_chart(st.session_state.emo_tl)
+    st.plotly_chart(st.session_state.emo_percent)
+    st.plotly_chart(st.session_state.freq_tb) 
+    st.text('')
+    with open("emo_video_output\\images.zip", "rb") as fp:
         st.download_button(
             label="Download output images (zip file)",
-            data="emo_video_output\\images.zip",
+            # data="emo_video_output\\images.zip",
+            data=fp,
             file_name="images.zip",
             mime="application/zip",
-            key='img'
             )
+    
+    with open("emo_video_output\\video.mp4", "rb") as fp:
         st.download_button(
             label="Download output video (mp4 file)",
-            data="emo_video_output\\video.mp4",
+            data=fp,
             file_name="video.mp4",
             mime="video/mp4",
-            key='video'
             )
-        
-        st.text('')
-        # Reset
-        if st.button('Reset'):
-            hotkey('f5') 
 
 
 
